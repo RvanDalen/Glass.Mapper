@@ -17,20 +17,19 @@
 //-CRE-
 
 
+using System.Collections.Generic;
+using System.Linq;
 using Castle.DynamicProxy;
 
 namespace Glass.Mapper.Pipelines.ObjectConstruction.Tasks.CreateConcrete
 {
-
-
     /// <summary>
     /// Class LazyObjectInterceptor
     /// </summary>
     public class LazyObjectInterceptor : IInterceptor
     {
         private readonly ObjectConstructionArgs _args;
-
-        private object _actual;
+        private readonly Dictionary<string, object> _values;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="LazyObjectInterceptor"/> class.
@@ -38,9 +37,9 @@ namespace Glass.Mapper.Pipelines.ObjectConstruction.Tasks.CreateConcrete
         /// <param name="args">The args.</param>
         public LazyObjectInterceptor(ObjectConstructionArgs args)
         {
+            _values = new Dictionary<string, object>();
             _args = args;
         }
-
       
         #region IInterceptor Members
 
@@ -50,19 +49,42 @@ namespace Glass.Mapper.Pipelines.ObjectConstruction.Tasks.CreateConcrete
         /// <param name="invocation">The invocation.</param>
         public void Intercept(IInvocation invocation)
         {
-            //create class
-            if (_actual == null)
-            {
-                _args.AbstractTypeCreationContext.IsLazy = false;
-                _actual = _args.Service.InstantiateObject(_args.AbstractTypeCreationContext);
-            }
+            if (!invocation.Method.IsSpecialName ||
+                !invocation.Method.Name.StartsWith("get_") && !invocation.Method.Name.StartsWith("set_")) return;
 
-            invocation.ReturnValue = invocation.Method.Invoke(_actual, invocation.Arguments);
+            var accessType = invocation.Method.Name.Substring(0, 4);
+            var propertyName = invocation.Method.Name.Substring(4);
+
+            if (accessType.Equals("get_"))
+            {
+                if (!_values.ContainsKey(propertyName))
+                {
+                    var typeCreationContext = _args.AbstractTypeCreationContext;
+                    if (typeCreationContext == null) return;
+
+                    var typeConfiguration = _args.Configuration;
+                    if (typeConfiguration == null) return;
+
+                    var dataMappingContext = _args.Service.CreateDataMappingContext(typeCreationContext, invocation.InvocationTarget);
+
+                    var property = typeConfiguration.Properties.FirstOrDefault(p => p.PropertyInfo.Name.Equals(propertyName));
+                    if (property != null)
+                    {
+                        var result = property.Mapper.MapToProperty(dataMappingContext);
+                        _values[propertyName] = result;
+                    }
+                }
+
+                if (_values.ContainsKey(propertyName))
+                    invocation.ReturnValue = _values[propertyName];
+            }
+            else if (accessType.Equals("set_"))
+            {
+                _values[propertyName] = invocation.Arguments[0];
+            }
         }
 
         #endregion
-
-
     }
 }
 
